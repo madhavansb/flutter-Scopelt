@@ -10,85 +10,70 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
 
-def scrape_with_blueprint():
+def scrape_category_page(driver, url, category_name):
     """
-    This script works because it is built from the exact HTML structure provided by the user.
-    1. Selenium loads the full page by handling the "Load More" button.
-    2. BeautifulSoup parses the final HTML using the correct, verified selectors.
-    """
-    # 1. --- Use Selenium to get the complete, fully-loaded page HTML ---
-    print("Setting up WebDriver...")
-    options = Options()
-    # options.add_argument("--headless")
-    options.add_argument("--start-maximized")
+    Navigates to a specific category URL, handles the 'Load More' button until all
+    content is loaded, and then uses BeautifulSoup to parse and extract event data.
     
-    try:
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=options)
-    except Exception as e:
-        print(f"Error setting up WebDriver: {e}")
-        return
+    Args:
+        driver: The active Selenium WebDriver instance.
+        url (str): The URL of the category page to scrape.
+        category_name (str): The name of the category (e.g., "Competitions").
 
-    target_url = "https://unstop.com/competitions"
-    print(f"Navigating to {target_url}...")
-    driver.get(target_url)
+    Returns:
+        list: A list of dictionaries, where each dictionary represents an event.
+    """
+    print(f"\nNavigating to {category_name} page: {url}")
+    driver.get(url)
+    time.sleep(2) # Allow initial page elements to render
 
-    # Handle cookie banner
-    try:
-        cookie_button = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, "accept-all-cookies")))
-        cookie_button.click()
-        print("Cookie consent banner accepted.")
-    except TimeoutException:
-        print("Cookie consent banner not found or already accepted.")
-
-    # Click "Load More" until all events are visible
-    print("Loading all events by clicking the 'Load More' button...")
+    # --- MORE ROBUST "LOAD MORE" LOGIC ---
+    print("Starting to load all events by clicking 'Load More'...")
+    click_count = 0
     while True:
         try:
-            load_more_button = WebDriverWait(driver, 5).until(
+            # Increase wait time for more patience on slow networks
+            load_more_button = WebDriverWait(driver, 10).until(
                 EC.element_to_be_clickable((By.XPATH, "//div[contains(text(), 'Load More')]"))
             )
-            driver.execute_script("arguments[0].scrollIntoView(true);", load_more_button)
-            time.sleep(1)
-            load_more_button.click()
-            print("Clicked 'Load More'.")
-            time.sleep(3)
+            # A more reliable click method
+            driver.execute_script("arguments[0].click();", load_more_button)
+            click_count += 1
+            print(f"  > Clicked 'Load More' ({click_count} time(s))...")
+            time.sleep(4) # Give ample time for new content to load after click
         except TimeoutException:
-            print("All events have been loaded.")
+            print("Finished loading. 'Load More' button is no longer available.")
             break
-
-    # 2. --- Pass the final HTML to BeautifulSoup ---
-    print("\nHanding over the complete page source to BeautifulSoup...")
-    page_source_html = driver.page_source
-    driver.quit() # We're done with the browser
+        except Exception as e:
+            print(f"An unexpected error occurred while clicking 'Load More': {e}")
+            break
+            
+    # --- Hand over to BeautifulSoup for reliable parsing ---
+    print("Handing over the fully loaded page to BeautifulSoup...")
+    soup = BeautifulSoup(driver.page_source, "html.parser")
     
-    soup = BeautifulSoup(page_source_html, "html.parser")
-
-    # 3. --- Extract data using the CORRECT selectors from your blueprint ---
-    print("Extracting data using the correct structure...")
-    all_events_data = []
-    
-    # The main container for each event is the <app-competition-listing> tag
+    page_data = []
     event_cards = soup.find_all("app-competition-listing")
     
     if not event_cards:
-        print("CRITICAL ERROR: Could not find any '<app-competition-listing>' tags. The core structure may have changed.")
-        return
+        print(f"Warning: No event listings found for the '{category_name}' category.")
+        return []
 
-    print(f"Success! Found {len(event_cards)} event listings.")
-
-    for i, card in enumerate(event_cards):
+    print(f"Found {len(event_cards)} listings in '{category_name}'. Extracting details...")
+    for card in event_cards:
         data = {}
+        # Add the category to each record
+        data['category'] = category_name
 
         # Title
         title_element = card.find("h2", class_="double-wrap")
         data['title'] = title_element.get_text(strip=True) if title_element else "N/A"
 
         # Organization
-        org_element = card.find("p") # The <p> tag is unique at this level
+        org_element = card.find("p")
         data['organization'] = org_element.get_text(strip=True) if org_element else "N/A"
 
-        # Tags (inside the 'skills' div)
+        # Tags
         tags_list = []
         skills_container = card.find("div", class_="skills")
         if skills_container:
@@ -97,33 +82,86 @@ def scrape_with_blueprint():
                 tags_list.append(tag.get_text(strip=True))
         data['tags'] = ", ".join(tags_list) if tags_list else "N/A"
 
-        # Other details like deadline and registrations
+        # Deadline
         data['deadline'] = "N/A"
-        data['registrations'] = "N/A"
         other_fields = card.find_all("div", class_="seperate_box")
         for field in other_fields:
             field_text = field.get_text(strip=True)
             if "days left" in field_text or "day left" in field_text or "Closes" in field_text or "Ends" in field_text:
                 data['deadline'] = field_text
-            elif "Registered" in field_text:
-                data['registrations'] = field_text
+                break
+        
+        page_data.append(data)
 
-        all_events_data.append(data)
-        print(f"  - Extracted: {data['title']}")
+    return page_data
 
-    # 4. --- Save the final, correct data to a CSV file ---
-    df = pd.DataFrame(all_events_data)
-    output_filename = "unstop_event_data_CORRECT.csv"
-    df.to_csv(output_filename, index=False, encoding='utf-8')
+def main():
+    """
+    Main function to orchestrate the scraping of multiple categories from Unstop.
+    """
+    PAGES_TO_SCRAPE = [
+        {"category": "Competitions", "url": "https://unstop.com/competitions"},
+        {"category": "Hackathons", "url": "https://unstop.com/hackathons"},
+        {"category": "Hiring Challenges", "url": "https://unstop.com/hiring-challenges"},
+    ]
+
+    print("--- Starting Unstop Multi-Category Scraper ---")
     
+    # --- Setup WebDriver ---
+    options = Options()
+    # options.add_argument("--headless")
+    options.add_argument("--start-maximized")
+    
+    try:
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=options)
+    except Exception as e:
+        print(f"Fatal Error: Could not set up WebDriver. {e}")
+        return
+
+    # Handle cookie banner on the first visit
+    driver.get("https://unstop.com")
+    try:
+        cookie_button = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, "accept-all-cookies")))
+        cookie_button.click()
+        print("Initial cookie consent banner accepted.")
+    except TimeoutException:
+        print("Initial cookie consent banner not found or already accepted.")
+
+    # --- Loop through all pages and collect data ---
+    all_unstop_data = []
+    for page in PAGES_TO_SCRAPE:
+        category_data = scrape_category_page(driver, page['url'], page['category'])
+        all_unstop_data.extend(category_data)
+        print(f"--- Finished scraping '{page['category']}'. Total items collected so far: {len(all_unstop_data)} ---")
+
+    # --- Cleanup and Save ---
+    print("\nAll categories scraped. Closing WebDriver.")
+    driver.quit()
+
+    if not all_unstop_data:
+        print("No data was scraped from any category. Exiting.")
+        return
+
+    df = pd.DataFrame(all_unstop_data)
+    
+    # Reorder columns to have 'category' first for better readability
+    df = df[['category', 'title', 'organization', 'tags', 'deadline']]
+    
+    output_filename = "unstop_all_events.csv"
+    df.to_csv(output_filename, index=False, encoding='utf-8')
+
     print("\n" + "="*50)
-    print("                SCRAPING SUMMARY")
+    print("                FINAL SCRAPING SUMMARY")
     print("="*50)
-    print(f"Total events scraped: {len(df)}")
+    print(f"Total events scraped across all categories: {len(df)}")
     print(f"Data successfully saved to '{output_filename}'")
-    print("\n--- SAMPLE OF CORRECTLY EXTRACTED DATA ---")
+    print("\n--- SAMPLE OF COMBINED DATA ---")
     print(df.head())
+    print("...")
+    print(df.tail())
     print("="*50)
+
 
 if __name__ == "__main__":
-    scrape_with_blueprint()
+    main()
