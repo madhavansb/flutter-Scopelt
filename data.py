@@ -9,6 +9,40 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
+import mysql.connector
+
+def insert_into_mysql(data):
+    try:
+        conn = mysql.connector.connect(
+            host='localhost',
+            user='user_name',
+            password='your_password',
+            database='unstop_data'
+        )
+        cursor = conn.cursor()
+
+        insert_query = """
+            INSERT INTO opportunities (category, title, organization, tags, deadline)
+            VALUES (%s, %s, %s, %s, %s)
+        """
+
+        for row in data:
+            cursor.execute(insert_query, (
+                row['category'],
+                row['title'],
+                row['organization'],
+                row['tags'],
+                row['deadline']
+            ))
+
+        conn.commit()
+        print(f"✅ {cursor.rowcount} records inserted into the database.")
+        cursor.close()
+        conn.close()
+
+    except mysql.connector.Error as err:
+        print(f"❌ MySQL Error: {err}")
+
 
 def scrape_category_page(driver, url, category_name):
     """
@@ -152,6 +186,14 @@ def main():
     print("...")
     print(df.tail())
     print("="*50)
+
+        # Save to CSV
+    df.to_csv(output_filename, index=False, encoding='utf-8')
+    print(f"✅ CSV saved to '{output_filename}'")
+
+    # Save to MySQL
+    insert_into_mysql(all_unstop_data)
+
 
 
 if __name__ == "__main__":
