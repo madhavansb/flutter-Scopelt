@@ -24,7 +24,8 @@ class _OpportunityViewerState extends State<OpportunityViewer> {
   Future<void> fetchOpportunities() async {
     try {
       final response = await http.get(
-        Uri.parse('http://10.0.2.2:5000/api/opportunities'),
+        Uri.parse('http://10.0.2.2:5000/api/opportunities'), //android emulator
+        Uri.parse('http://192.168.1.10:5000/api/opportunities'), // connecting to the mobile device through the usb cable
       );
 
       if (response.statusCode == 200) {
