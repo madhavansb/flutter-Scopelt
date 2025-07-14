@@ -28,6 +28,8 @@ This project is a **Flutter-based app** that fetches opportunity listings (compe
 
 --
 
+Create a SQL databse for storing the data from the csv file or directly add to the MySQL Databse and call the database using the python program to call as an API 
+
 first run the data.py program that stores the data in the sql databse in this give your user name and your password
 then run api.py program file
 
