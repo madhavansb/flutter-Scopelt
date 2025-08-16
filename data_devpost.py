@@ -1,138 +1,158 @@
+import time
+import re
+import csv  # Import the CSV module
+import mysql.connector
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
-from selenium.common.exceptions import TimeoutException
-import time
-import csv
-import re
 
-# Setup Chrome options
-options = Options()
-options.add_argument('--headless')  # Run without UI
-options.add_argument('--disable-gpu')
-options.add_argument('--window-size=1920,1080')
-options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0')
+def save_to_csv(hackathon_data, filename):
+    """Saves the scraped hackathon data to a CSV file."""
+    if not hackathon_data:
+        print("No data to save to CSV.")
+        return
 
-# Launch WebDriver
-driver = webdriver.Chrome(options=options)
+    # Define the headers for the CSV file
+    headers = ['title', 'link', 'location', 'participants', 'days_left', 'host']
+    
+    try:
+        with open(filename, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=headers)
+            writer.writeheader()
+            writer.writerows(hackathon_data)
+        print(f"\n✅ Data successfully saved to '{filename}'")
+    except IOError as e:
+        print(f"❌ Error saving to CSV file: {e}")
 
-try:
-    url = 'https://devpost.com/hackathons?status[]=open'
-    driver.get(url)
+def upsert_to_mysql(hackathon_data):
+    """
+    Connects to the devpost_data database and performs an "upsert" operation.
+    - INSERTS a new hackathon if it doesn't exist.
+    - UPDATES an existing hackathon if a duplicate is found (based on title and host).
+    """
+    if not hackathon_data:
+        print("No data to insert into the database.")
+        return
 
-    # Wait for container to load
-    WebDriverWait(driver, 10).until(
-        EC.presence_of_element_located((By.CLASS_NAME, 'hackathons-container'))
-    )
+    try:
+        with mysql.connector.connect(
+            host='localhost',
+            user='YOUR_USERNAME',
+            password='YOUR_USER_PASSWORD',  # Replace with your password
+            database='devpost_data'
+        ) as conn:
+            with conn.cursor() as cursor:
+                upsert_query = """
+                    INSERT INTO hackathons (title, link, location, participants, days_left, host)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        link = VALUES(link),
+                        location = VALUES(location),
+                        participants = VALUES(participants),
+                        days_left = VALUES(days_left);
+                """
+                
+                records_to_upsert = [
+                    (
+                        hackathon['title'], hackathon['link'], hackathon['location'],
+                        hackathon['participants'], hackathon['days_left'], hackathon['host']
+                    ) for hackathon in hackathon_data
+                ]
 
-    # Scroll to load content
-    scroll_pause = 4
-    max_attempts = 30
-    previous_count = 0
+                cursor.executemany(upsert_query, records_to_upsert)
+                conn.commit()
 
-    for attempt in range(max_attempts):
-        driver.execute_script("window.scrollBy(0, 1000);")
-        time.sleep(scroll_pause)
+                print(f"✅ Database synchronized. {cursor.rowcount} records were inserted or updated.")
 
-        # Click Load More if exists
-        try:
-            load_more = WebDriverWait(driver, 2).until(
-                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Load More') or contains(text(), 'Show More')]"))
-            )
-            load_more.click()
-            time.sleep(scroll_pause)
-        except:
-            pass
+    except mysql.connector.Error as err:
+        print(f"❌ MySQL Error: {err}")
 
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(scroll_pause)
+def main():
+    """Main function to scrape Devpost, save to CSV, and update the database."""
+    # --- Setup Chrome options ---
+    options = Options()
+    options.add_argument('--headless')
+    options.add_argument('--disable-gpu')
+    options.add_argument('--window-size=1920,1080')
+    options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
+    driver = webdriver.Chrome(options=options)
+    all_hackathons = []
+
+    try:
+        url = 'https://devpost.com/hackathons?status[]=open'
+        print(f"Navigating to {url}...")
+        driver.get(url)
+
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.CLASS_NAME, 'hackathons-container'))
+        )
+
+        # --- Scroll to load all content ---
+        print("Scrolling to load all hackathons...")
+        last_height = driver.execute_script("return document.body.scrollHeight")
+        while True:
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(3)
+            new_height = driver.execute_script("return document.body.scrollHeight")
+            if new_height == last_height:
+                break
+            last_height = new_height
+
+        print("Finished scrolling. Parsing final page content...")
         soup = BeautifulSoup(driver.page_source, 'html.parser')
-        container = soup.find('div', class_='hackathons-container')
-        tiles = container.find_all('div', class_='hackathon-tile')
-        current_count = len(tiles)
+        tiles = soup.find_all('div', class_='hackathon-tile')
+        print(f"Found {len(tiles)} total hackathon listings.")
 
-        print(f"Attempt {attempt + 1}: {current_count} hackathon tiles")
+        # --- Parse final results ---
+        for i, tile in enumerate(tiles, 1):
+            title_elem = tile.find(['h2', 'h3'])
+            title = title_elem.get_text(strip=True) if title_elem else 'N/A'
 
-        if current_count == previous_count and attempt > 2:
-            break
-        previous_count = current_count
+            link_elem = tile.find('a', href=True)
+            link = 'N/A'
+            if link_elem:
+                href = link_elem['href']
+                link = href if href.startswith('http') else f"https://devpost.com{href}"
 
-    # Parse final results
-    soup = BeautifulSoup(driver.page_source, 'html.parser')
-    tiles = soup.find_all('div', class_='hackathon-tile')
+            text_block = tile.get_text(separator=' ', strip=True)
 
-    hackathon_data = []
-    for i, tile in enumerate(tiles, 1):
-        data = {
-            'title': 'N/A',
-            'link': 'N/A',
-            'location': 'N/A',
-            'prize_money': 'N/A',
-            'participants': 'N/A',
-            'days_left': 'N/A',
-            'host': 'N/A'
-        }
+            days_match = re.search(r'(\d+\s+days?\s+left|Submission period ends\s+in\s+\d+\s+hours)', text_block, re.IGNORECASE)
+            days_left = days_match.group(1) if days_match else 'N/A'
+            
+            participants_match = re.search(r'(\d[\d,]*)\s+participants', text_block, re.IGNORECASE)
+            participants = participants_match.group(1).replace(',', '') if participants_match else 'N/A'
+            
+            location = 'N/A'
+            if "Online" in text_block: location = "Online"
+            elif "Remote" in text_block: location = "Remote"
 
-        # Title
-        title_elem = tile.find(['h2', 'h3'])
-        if title_elem:
-            data['title'] = title_elem.get_text(strip=True)
+            host_elem = tile.find('p', class_='hosted-by')
+            host = host_elem.get_text(strip=True).replace('Hosted by', '').strip() if host_elem else 'N/A'
+            
+            all_hackathons.append({
+                'title': title, 'link': link, 'location': location,
+                'participants': participants, 'days_left': days_left, 'host': host
+            })
+            print(f"  > Scraped: {title}")
 
-        # Link
-        link_elem = tile.find('a', href=True)
-        if link_elem:
-            href = link_elem['href']
-            data['link'] = href if href.startswith('http') else f"https://devpost.com{href}"
+    except Exception as e:
+        print(f"❌ An error occurred during scraping: {e}")
+    finally:
+        driver.quit()
 
-        # Full text block
-        text_block = tile.get_text(separator=' ', strip=True)
+    if not all_hackathons:
+        print("\nScraping finished, but no hackathons were found. Exiting.")
+        return
 
-        # Days left
-        days_match = re.search(r'(\d+\s+days?\s+left)', text_block, re.IGNORECASE)
-        if days_match:
-            data['days_left'] = days_match.group(1)
+    # --- Step 1: Save the content to hackathons.csv ---
+    save_to_csv(all_hackathons, 'hackathons.csv')
 
-        # Prize Money
-        prize_match = re.search(r'(\$\d[\d,]*)', text_block)
-        if prize_match:
-            data['prize_money'] = prize_match.group(1)
+    # --- Step 2: Connect to the database and update ---
+    upsert_to_mysql(all_hackathons)
 
-        # Participants
-        participants_match = re.search(r'(\d[\d,]*)\s+participants', text_block, re.IGNORECASE)
-        if participants_match:
-            count = participants_match.group(1).replace(',', '')
-            data['participants'] = f"{count} participants"
-
-        # Location (Online or Remote or N/A fallback)
-        if "Online" in text_block:
-            data['location'] = "Online"
-        elif "Remote" in text_block:
-            data['location'] = "Remote"
-
-        # Host or Description
-        host_elem = tile.find('p') or tile.find('span')
-        if host_elem:
-            data['host'] = host_elem.get_text(strip=True)
-
-        hackathon_data.append(data)
-        print(f"[{i}] {data['title']} - {data['participants']} - {data['prize_money']}")
-
-    # Save to CSV
-    headers = ['title', 'link', 'location', 'prize_money', 'participants', 'days_left', 'host']
-    with open('hackathons.csv', 'w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=headers)
-        writer.writeheader()
-        writer.writerows(hackathon_data)
-
-    print("\n✅ Data saved to 'hackathons.csv'")
-    print(f"✅ Total hackathons scraped: {len(hackathon_data)}")
-
-except Exception as e:
-    print(f"❌ Error occurred: {e}")
-
-finally:
-    driver.quit()
+if __name__ == "__main__":
+    main()
