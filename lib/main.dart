@@ -4,7 +4,6 @@ import 'package:hackathon/responsive/mob_scaff.dart';
 import 'package:hackathon/responsive/responsive_layout.dart';
 import 'package:hackathon/responsive/tab_scaff.dart';
 
-
 void main() {
   runApp(MainApp());
 }
