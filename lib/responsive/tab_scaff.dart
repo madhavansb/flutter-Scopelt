@@ -2,22 +2,31 @@ import 'package:flutter/material.dart';
 import 'package:hackathon/constants.dart';
 import 'package:hackathon/responsive/unstop.dart';
 
-class TableScaffold extends StatefulWidget {
-  const TableScaffold({super.key});
+class TableScaffold extends StatelessWidget {
+  final VoidCallback toggleTheme;
 
-  @override
-  State<TableScaffold> createState() => _TableScaffoldState();
-}
+  const TableScaffold({Key? key, required this.toggleTheme}) : super(key: key);
 
-class _TableScaffoldState extends State<TableScaffold> {
   @override
   Widget build(BuildContext context) {
+    // Check the current brightness to decide the icon
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
     return Scaffold(
-      // backgroundColor: Colors.pink,
-      appBar: myAppBar,
-      backgroundColor: defaultbackground,
+      // Use the new, theme-aware AppBar function from constants
+      appBar: buildAppBar(
+        context: context,
+        actions: [
+          IconButton(
+            icon: Icon(isDarkMode ? Icons.light_mode : Icons.dark_mode),
+            tooltip: 'Toggle Theme', // Good for accessibility
+            onPressed: toggleTheme,
+          ),
+        ],
+      ),
+      // The background color is now handled by the theme
       drawer: myDrawer,
-      body:OpportunityViewer(),
+      body: OpportunityViewer(),
     );
   }
 }
