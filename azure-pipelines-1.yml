@@ -1,0 +1,29 @@
+trigger:
+  - main   # or your branch
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+  # 1️⃣ Install Flutter
+  - task: UseFlutterVersion@0
+    inputs:
+      version: '3.13.0'  # Your required Flutter version
+
+  # 2️⃣ Get dependencies
+  - script: flutter pub get
+    displayName: 'Get Flutter dependencies'
+
+  # 3️⃣ Run tests
+  - script: flutter test
+    displayName: 'Run Flutter Tests'
+
+  # 4️⃣ Build APK
+  - script: flutter build apk --release
+    displayName: 'Build Release APK'
+
+  # 5️⃣ Publish artifacts
+  - task: PublishBuildArtifacts@1
+    inputs:
+      PathtoPublish: 'build/app/outputs/flutter-apk/app-release.apk'
+      ArtifactName: 'FlutterAPK'
